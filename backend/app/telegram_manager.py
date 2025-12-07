@@ -1,14 +1,13 @@
 from telethon import TelegramClient
 from telethon.errors import (
-    AuthKeyError, 
+    AuthKeyError,
     SessionPasswordNeededError,
     UserDeactivatedError,
     AuthKeyUnregisteredError,
-    FloodWaitError,
-    ConnectionError
+    FloodWaitError
 )
-from telethon.tl.functions.dialogs import GetDialogsRequest
 from telethon.tl.types import InputPeerEmpty
+from typing import Optional, List, Dict, Any, AsyncGenerator
 from telethon.tl.functions.messages import GetHistoryRequest
 from typing import Optional, List, Dict, Any, AsyncGenerator
 import asyncio
@@ -25,6 +24,7 @@ class TelegramManager:
         self._client: Optional[TelegramClient] = None
         self._phone_code_hash: Optional[str] = None
         self._parsing_lock = asyncio.Lock()
+        self._is_connected = False
     
     async def _get_client(self, string_session: Optional[str] = None) -> TelegramClient:
         """Get or create Telethon client"""
@@ -44,7 +44,11 @@ class TelegramManager:
             
             if string_session:
                 self._client.session.set_dc(2, '149.154.167.51', 80)
-                self._client.session.save = lambda: None
+        
+        # Connect only if not already connected
+        if not self._is_connected:
+            await self._client.connect()
+            self._is_connected = True
         
         return self._client
     
@@ -52,7 +56,6 @@ class TelegramManager:
         """Request verification code"""
         try:
             client = await self._get_client()
-            await client.connect()
             
             result = await client.send_code_request(phone)
             self._phone_code_hash = result.phone_code_hash
@@ -70,7 +73,6 @@ class TelegramManager:
                     session.updated_at = datetime.utcnow()
                 await db.commit()
             
-            await client.disconnect()
             return True
             
         except Exception as e:
@@ -88,7 +90,6 @@ class TelegramManager:
                 phone_code_hash = session.phone_code_hash
             
             client = await self._get_client()
-            await client.connect()
             
             # Sign in
             await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
@@ -96,6 +97,9 @@ class TelegramManager:
             # Get string session
             string_session = client.session.save()
             
+            if not string_session:
+                raise ValueError("Failed to get session string after sign in")
+
             # Encrypt and save to database
             encrypted_session = encryption.encrypt(string_session)
             
@@ -107,7 +111,6 @@ class TelegramManager:
                     session.updated_at = datetime.utcnow()
                     await db.commit()
             
-            await client.disconnect()
             return string_session
             
         except Exception as e:
@@ -136,9 +139,7 @@ class TelegramManager:
                 try:
                     string_session = encryption.decrypt(session.string_session)
                     client = await self._get_client(string_session)
-                    await client.connect()
                     me = await client.get_me()
-                    await client.disconnect()
                     
                     return {
                         "status": "valid",
@@ -178,6 +179,7 @@ class TelegramManager:
             if self._client:
                 await self._client.disconnect()
                 self._client = None
+                self._is_connected = False
             
             return True
             
@@ -197,29 +199,22 @@ class TelegramManager:
                 string_session = encryption.decrypt(session.string_session)
             
             client = await self._get_client(string_session)
-            await client.connect()
             
-            # Get dialogs
-            result = await client(GetDialogsRequest(
-                offset_date=None,
-                offset_id=0,
-                offset_peer=InputPeerEmpty(),
-                limit=100,
-                hash=0
-            ))
+            # Get dialogs using get_dialogs method
+            dialogs = await client.get_dialogs(limit=100)
             
             chats = []
-            for chat in result.chats:
-                if hasattr(chat, 'title') or hasattr(chat, 'username'):
+            for dialog in dialogs:
+                entity = dialog.entity
+                if hasattr(entity, 'title') or hasattr(entity, 'first_name') or hasattr(entity, 'username'):
                     chat_info = ChatInfo(
-                        id=chat.id,
-                        title=getattr(chat, 'title', getattr(chat, 'first_name', 'Unknown')),
-                        username=getattr(chat, 'username', None),
-                        type=type(chat).__name__
+                        id=entity.id,
+                        title=getattr(entity, 'title', getattr(entity, 'first_name', 'Unknown')),
+                        username=getattr(entity, 'username', None),
+                        type=type(entity).__name__
                     )
                     chats.append(chat_info)
             
-            await client.disconnect()
             return chats
             
         except Exception as e:
@@ -240,7 +235,6 @@ class TelegramManager:
                 string_session = encryption.decrypt(session.string_session)
             
             client = await self._get_client(string_session)
-            await client.connect()
             
             # Get chat entity
             chat = await client.get_entity(chat_id)
@@ -325,8 +319,6 @@ class TelegramManager:
                     logger.error(f"Error fetching batch: {e}")
                     break
             
-            await client.disconnect()
-            
         except Exception as e:
             logger.error(f"Failed to fetch messages: {e}")
             await self._handle_session_error(e)
@@ -341,5 +333,11 @@ class TelegramManager:
                     session.status = "invalid"
                     session.updated_at = datetime.utcnow()
                     await db.commit()
+
+    async def close(self):
+        """Close the client connection when shutting down the application"""
+        if self._client and self._is_connected:
+            await self._client.disconnect()
+            self._is_connected = False
 
 telegram_manager = TelegramManager()

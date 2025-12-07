@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, JSON, Index
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, JSON, Index, text
 from sqlalchemy.pool import NullPool
 from datetime import datetime
 from .config import config
@@ -54,8 +54,8 @@ engine = create_async_engine(
 # Enable WAL mode
 async def enable_wal_mode():
     async with engine.begin() as conn:
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA busy_timeout=%d" % config.SQLITE_BUSY_TIMEOUT)
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.execute(text("PRAGMA busy_timeout=%d" % config.SQLITE_BUSY_TIMEOUT))
 
 SessionLocal = async_sessionmaker(
     engine, 

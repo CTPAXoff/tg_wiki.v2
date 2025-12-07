@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     pass
 
+
 app = FastAPI(
     title="Telegram Parser API",
     description="Minimal Telegram message parser with Telethon",
@@ -62,10 +63,13 @@ async def request_code(request: RequestCodeRequest):
         return {"status": "ok"}
     except ValueError as e:
         logger.warning(f"Invalid phone: {e}")
-        raise HTTPException(status_code=400, detail=create_error_response("InvalidPhone", str(e)))
+        raise HTTPException(status_code=400, detail=create_error_response("InvalidPhone", str(e)).model_dump())
+    except asyncio.CancelledError:
+        logger.warning("Request code request was cancelled (likely due to timeout)")
+        raise HTTPException(status_code=504, detail=create_error_response("Timeout", "Request timed out").model_dump())
     except Exception as e:
         logger.error(f"Request code failed: {e}")
-        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to request code"))
+        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to request code").model_dump())
 
 @app.post("/auth/confirm-code")
 async def confirm_code(request: ConfirmCodeRequest):
@@ -75,10 +79,13 @@ async def confirm_code(request: ConfirmCodeRequest):
         return {"status": "ok"}
     except ValueError as e:
         logger.warning(f"Invalid code: {e}")
-        raise HTTPException(status_code=400, detail=create_error_response("CodeExpired", str(e)))
+        raise HTTPException(status_code=400, detail=create_error_response("CodeExpired", str(e)).model_dump())
+    except asyncio.CancelledError:
+        logger.warning("Confirm code request was cancelled (likely due to timeout)")
+        raise HTTPException(status_code=504, detail=create_error_response("Timeout", "Request timed out").model_dump())
     except Exception as e:
         logger.error(f"Confirm code failed: {e}")
-        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to confirm code"))
+        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to confirm code").model_dump())
 
 @app.get("/auth/status", response_model=AuthStatusResponse)
 async def get_auth_status():
@@ -98,7 +105,7 @@ async def reset_session():
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Reset session failed: {e}")
-        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to reset session"))
+        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to reset session").model_dump())
 
 @app.get("/telegram/chats", response_model=list[ChatInfo])
 async def get_chats():
@@ -108,10 +115,10 @@ async def get_chats():
         return chats
     except ValueError as e:
         logger.warning(f"No valid session: {e}")
-        raise HTTPException(status_code=401, detail=create_error_response("SessionInvalid", str(e)))
+        raise HTTPException(status_code=401, detail=create_error_response("SessionInvalid", str(e)).model_dump())
     except Exception as e:
         logger.error(f"Get chats failed: {e}")
-        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to get chats"))
+        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to get chats").model_dump())
 
 @app.post("/telegram/fetch-messages")
 async def fetch_messages(request: FetchMessagesRequest, background_tasks: BackgroundTasks):
@@ -119,7 +126,7 @@ async def fetch_messages(request: FetchMessagesRequest, background_tasks: Backgr
     try:
         # Check if parsing is already running
         if parsing_progress["status"] == "parsing":
-            raise HTTPException(status_code=409, detail=create_error_response("AlreadyParsing", "Parsing already in progress"))
+            raise HTTPException(status_code=409, detail=create_error_response("AlreadyParsing", "Parsing already in progress").model_dump())
         
         # Start background task
         background_tasks.add_task(fetch_messages_background, request)
@@ -127,7 +134,7 @@ async def fetch_messages(request: FetchMessagesRequest, background_tasks: Backgr
         return {"status": "started"}
     except Exception as e:
         logger.error(f"Start message fetching failed: {e}")
-        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to start message fetching"))
+        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to start message fetching").model_dump())
 
 async def fetch_messages_background(request: FetchMessagesRequest):
     """Background task for fetching messages"""
@@ -233,7 +240,7 @@ async def get_messages(chat_id: int, limit: int = 50, offset: int = 0):
             ]
     except Exception as e:
         logger.error(f"Failed to get messages: {e}")
-        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to get messages"))
+        raise HTTPException(status_code=500, detail=create_error_response("UnknownError", "Failed to get messages").model_dump())
 
 @app.get("/")
 async def root():
@@ -244,3 +251,7 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await telegram_manager.close()
